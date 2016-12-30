@@ -1,6 +1,11 @@
 /**
- * Multithreaded, evhttp-based http get server.
+ * Multithreaded, libevent 2.x-based socket server.
  * Copyright (c) 2012 Qi Huang
+ * This software is licensed under the BSD license.
+ * See the accompanying LICENSE.txt for details.
+ *
+ * To compile: ./make
+ * To run: ./echoserver_threaded
  */
 
 #include <sys/types.h>
@@ -16,7 +21,6 @@
 #include <err.h>
 #include <event2/bufferevent.h>
 #include <event2/buffer.h>
-#include <event2/http.h>
 #include <event2/listener.h>
 #include <event2/util.h>
 #include <event2/event.h>
@@ -43,14 +47,20 @@
  * Struct to carry around connection (client)-specific data.
  */
 typedef struct client {
+    /* The client's socket. */
+    int fd;
+
     /* The event_base for this client. */
     struct event_base *evbase;
 
-    /* The evhttp for this client. */
-    struct evhttp *evhttp;
+    /* The bufferedevent for this client. */
+    struct bufferevent *buf_ev;
 
-    /* The evhttp_bound_socket for this client. */
-    struct evhttp_bound_socket *handle;
+    /* The output buffer for this client. */
+    struct evbuffer *output_buffer;
+
+    /* Here you can add your own application-specific attributes which
+     * are connection-specific. */
 } client_t;
 
 static struct event_base *evbase_accept;
@@ -61,15 +71,9 @@ static void sighandler(int signal);
 
 static void closeClient(client_t *client) {
     if (client != NULL) {
-        if (client->handle != NULL) {
-            evutil_socket_t client_fd
-                = evhttp_bound_socket_get_fd(client->handle);
-            if (client_fd > 0) {
-                evutil_closesocket(client_fd);
-            }
-            evhttp_del_accept_socket(client->evhttp, client->handle);
-            free(client->handle);
-            client->handle = NULL;
+        if (client->fd >= 0) {
+            close(client->fd);
+            client->fd = -1;
         }
     }
 }
@@ -77,13 +81,17 @@ static void closeClient(client_t *client) {
 static void closeAndFreeClient(client_t *client) {
     if (client != NULL) {
         closeClient(client);
-        if (client->evhttp != NULL) {
-            evhttp_free(client->evhttp);
-            client->evhttp = NULL;
+        if (client->buf_ev != NULL) {
+            bufferevent_free(client->buf_ev);
+            client->buf_ev = NULL;
         }
         if (client->evbase != NULL) {
             event_base_free(client->evbase);
             client->evbase = NULL;
+        }
+        if (client->output_buffer != NULL) {
+            evbuffer_free(client->output_buffer);
+            client->output_buffer = NULL;
         }
         free(client);
     }
@@ -98,26 +106,56 @@ static void closeAndFreeClient(client_t *client) {
 
 
 /**
- * Called by libevent when there is request coming.
+ * Called by libevent when there is data to read.
  */
-void request_on_receivd(struct evhttp_request *req, void *arg) {
+void buffered_on_read(struct bufferevent *bev, void *arg) {
     client_t *client = (client_t *)arg;
-    const char *cmdtype;
+    char data[4096];
+    char resp[8] = {'S','T','O','R','E','D',13,10};    
+    int nbytes;
 
-    switch(evhttp_request_get_command(req)) {
-        case EVHTTP_REQ_GET: cmdtype = "GET"; break;
-        case EVHTTP_REQ_HEAD: cmdtype = "HEAD"; break;
-        default: cmdtype = "Unknown"; break;
+    /* If we have input data, the number of bytes we have is contained in
+     * bev->input->off. Copy the data from the input buffer to the output
+     * buffer in 4096-byte chunks. There is a one-liner to do the whole thing
+     * in one shot, but the purpose of this server is to show actual real-world
+     * reading and writing of the input and output buffers, so we won't take
+     * that shortcut here. */
+    struct evbuffer *input;
+    input = bufferevent_get_input(bev);
+    while (evbuffer_get_length(input) > 0) {
+        /* Remove a chunk of data from the input buffer, copying it into our
+         * local array (data). */
+        nbytes = evbuffer_remove(input, data, 4096); 
+        //printf("data:%.*s\n",nbytes,data);
+        //printf("resp:%.*s\n",8,resp);
+        /* Add the chunk of data from our local array (data) to the client's
+         * output buffer. */
+        //evbuffer_add(client->output_buffer, data, nbytes);
+        evbuffer_add(client->output_buffer, resp, 8);
     }
 
-    printf("received a %s request for %s\n",
-            cmdtype, evhttp_request_get_uri(req));
-
-    /* Send a 200 OK reply to client */
-    evhttp_send_reply(req, 200, "OK", NULL);
+    /* Send the results to the client.  This actually only queues the results
+     * for sending. Sending will occur asynchronously, handled by libevent. */
+    if (bufferevent_write_buffer(bev, client->output_buffer)) {
+        errorOut("Error sending data to client on fd %d\n", client->fd);
+        closeClient(client);
+    }
 }
 
+/**
+ * Called by libevent when the write buffer reaches 0.  We only
+ * provide this because libevent expects it, but we don't use it.
+ */
+void buffered_on_write(struct bufferevent *bev, void *arg) {
+}
 
+/**
+ * Called by libevent when there is an error on the underlying socket
+ * descriptor.
+ */
+void buffered_on_error(struct bufferevent *bev, short what, void *arg) {
+    closeClient((client_t *)arg);
+}
 
 static void server_job_function(struct job *job) {
     client_t *client = (client_t *)job->user_data;
@@ -132,49 +170,87 @@ static void server_job_function(struct job *job) {
  * ready to be accepted.
  */
 void on_accept(evutil_socket_t fd, short ev, void *arg) {
+    int client_fd;
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
     workqueue_t *workqueue = (workqueue_t *)arg;
     client_t *client;
     job_t *job;
 
-    /* Create a client object. */
-    if ((client = malloc(sizeof(*client))) == NULL) {
-        warn("failed to allocate memory for client state");
-        return;
-    }
-    memset(client, 0, sizeof(*client));
-
-    /* Create new event_base, evhttp and accept a new connection for client. */
-    if ((client->evbase = event_base_new()) == NULL) {
-        warn("client event_base creation failed");
-        closeAndFreeClient(client);
-        return;
-    }
-    if ((client->evhttp = evhttp_new(client->evbase)) == NULL) {
-        warn("client evhttp creation failed");
-        closeAndFreeClient(client);
-        return;
-    }
-    client->handle = evhttp_accept_socket_with_handle(client->evhttp, fd);
-    if (client->handle == NULL) {
+    client_fd = accept(fd, (struct sockaddr *)&client_addr, &client_len);
+    if (client_fd < 0) {
         warn("accept failed");
-        closeAndFreeClient(client);
         return;
     }
 
     /* Set the client socket to non-blocking mode. */
-    evutil_socket_t client_fd = evhttp_bound_socket_get_fd(client->handle);
     if (evutil_make_socket_nonblocking(client_fd) < 0) {
         warn("failed to set client socket to non-blocking");
-        closeAndFreeClient(client);
+        close(client_fd);
         return;
     }
+
+    /* Create a client object. */
+    if ((client = malloc(sizeof(*client))) == NULL) {
+        warn("failed to allocate memory for client state");
+        close(client_fd);
+        return;
+    }
+    memset(client, 0, sizeof(*client));
+    client->fd = client_fd;
 
     /* Add any custom code anywhere from here to the end of this function
      * to initialize your application-specific attributes in the client struct.
      */
 
-    /* Set the default callback for evhttp */
-    evhttp_set_gencb(client->evhttp, request_on_receivd, client);
+    if ((client->output_buffer = evbuffer_new()) == NULL) {
+        warn("client output buffer allocation failed");
+        closeAndFreeClient(client);
+        return;
+    }
+
+    if ((client->evbase = event_base_new()) == NULL) {
+        warn("client event_base creation failed");
+        closeAndFreeClient(client);
+        return;
+    }
+
+    /* Create the buffered event.
+     *
+     * The first argument is the file descriptor that will trigger
+     * the events, in this case the clients socket.
+     *
+     * The second argument is the callback that will be called
+     * when data has been read from the socket and is available to
+     * the application.
+     *
+     * The third argument is a callback to a function that will be
+     * called when the write buffer has reached a low watermark.
+     * That usually means that when the write buffer is 0 length,
+     * this callback will be called.  It must be defined, but you
+     * don't actually have to do anything in this callback.
+     *
+     * The fourth argument is a callback that will be called when
+     * there is a socket error.  This is where you will detect
+     * that the client disconnected or other socket errors.
+     *
+     * The fifth and final argument is to store an argument in
+     * that will be passed to the callbacks.  We store the client
+     * object here.
+     */
+    client->buf_ev = bufferevent_socket_new(client->evbase, client_fd,
+                                            BEV_OPT_CLOSE_ON_FREE);
+    if ((client->buf_ev) == NULL) {
+        warn("client bufferevent creation failed");
+        closeAndFreeClient(client);
+        return;
+    }
+    bufferevent_setcb(client->buf_ev, buffered_on_read, buffered_on_write,
+                      buffered_on_error, client);
+
+    /* We have to enable it before our callbacks will be
+     * called. */
+    bufferevent_enable(client->buf_ev, EV_READ);
 
     /* Create a job object and add it to the work queue. */
     if ((job = malloc(sizeof(*job))) == NULL) {

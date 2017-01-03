@@ -1,0 +1,5 @@
+.DS_Store
+.vscode/
+echoserver_threaded
+echoserver_threaded.dSYM/
+test

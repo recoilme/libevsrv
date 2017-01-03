@@ -26,6 +26,7 @@
 #include <event2/event.h>
 #include <signal.h>
 
+#include "commands.h"
 #include "workqueue.h"
 
 /* Port to listen on. */
@@ -41,6 +42,30 @@
 #define errorOut(...) {\
     fprintf(stderr, "%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
     fprintf(stderr, __VA_ARGS__);\
+}
+
+// Behaves similarly to printf(...), but adds file, line, and function
+// information.  I omit do ... while(0) because I always use curly braces in my
+// if statements.
+#define INFO_OUT(...) {\
+	printf("%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
+	printf(__VA_ARGS__);\
+}
+
+// Behaves similarly to fprintf(stderr, ...), but adds file, line, and function
+// information.
+#define ERROR_OUT(...) {\
+	fprintf(stderr, "\e[0;1m%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
+	fprintf(stderr, __VA_ARGS__);\
+	fprintf(stderr, "\e[0m");\
+}
+
+// Behaves similarly to perror(...), but supports printf formatting and prints
+// file, line, and function information.
+#define ERRNO_OUT(...) {\
+	fprintf(stderr, "\e[0;1m%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
+	fprintf(stderr, __VA_ARGS__);\
+	fprintf(stderr, ": %d (%s)\e[0m\n", errno, strerror(errno));\
 }
 
 /**
@@ -61,6 +86,7 @@ typedef struct client {
 
     /* Here you can add your own application-specific attributes which
      * are connection-specific. */
+    long valsize;
 } client_t;
 
 static struct event_base *evbase_accept;
@@ -98,17 +124,209 @@ static void closeAndFreeClient(client_t *client) {
 }
 
 
+/* Count the total occurrences of 'str' in 'buf'. */
+int count_instances(struct evbuffer *buf, const char *str)
+{
+    size_t len = strlen(str);
+    int total = 0;
+    struct evbuffer_ptr p;
+
+    if (!len)
+        /* Don't try to count the occurrences of a 0-length string. */
+        return -1;
+
+    evbuffer_ptr_set(buf, &p, 0, EVBUFFER_PTR_SET);
+
+    while (1) {
+         p = evbuffer_search(buf, str, len, &p);
+         if (p.pos < 0)
+             break;
+         total++;
+         evbuffer_ptr_set(buf, &p, 1, EVBUFFER_PTR_ADD);
+    }
+
+    return total;
+}
+
+size_t str_firstpos(struct evbuffer *buf, const char *str)
+{
+    size_t len = strlen(str);
+    struct evbuffer_ptr p;
+
+    if (!len)
+        /* Don't try to count the occurrences of a 0-length string. */
+        return -1;
+
+    p = evbuffer_search(buf, str, len, NULL);
+    return p.pos;
+}
+
+void write_msg(struct bufferevent *buf_event, struct client *client, const char *msg) {
+    evbuffer_add(client->output_buffer, msg, sizeof(msg));
+    //flush buffer
+    if (bufferevent_write_buffer(buf_event, client->output_buffer)) {
+        errorOut("Error sending data to client on fd %d\n", client->fd);
+        closeClient(client);
+    }
+}
+/**
+ * Called by libevent when there is data to read.
+ */
+void buffered_on_read(struct bufferevent *buf_event, void *arg)
+{
+    char *cmdline;
+    char *temp;
+    char *cmd;
+    char *key;
+    char *val;
+    int processset = 0;
+    struct evbuffer *buf;
+
+    const char stored[8] = {'S','T','O','R','E','D',13,10};
+    const char not_stored[12] = {'N','O','T','_','S','T','O','R','E','D',13,10}; 
+    const char error[7] = {'E','R','R','O','R',13,10};
+    
+    buf = bufferevent_get_input(buf_event);
+    client_t *client = (client_t *)arg;
+
+    //check new line
+    int cntnl = count_instances(buf,"\n");
+    if (cntnl < 1) { 
+        //no new line, wait next portion
+        return;
+    }
+    //check set
+    processset = 0;
+    if (str_firstpos(buf,"set") == 0) {
+        if (cntnl <=1) {
+            //set without val - wait next portion
+            return;
+        }
+        else{
+            //set and more then 2 line
+            processset = 1;
+        }
+    }
+
+    cmdline = evbuffer_readln(buf, NULL, EVBUFFER_EOL_CRLF_STRICT);
+    if(!cmdline) {
+        return;
+    }
+    else {
+        INFO_OUT("Read a line of length %zd from client on fd %d: %s\n", strlen(cmdline), client->fd, cmdline);
+    }
+    temp = strtok(cmdline, " ");
+    if (!temp) {
+        errorOut("Error: Empty command\n");
+        return;
+    }
+    else{
+        cmd = temp;
+        INFO_OUT("command:%s\n",cmd);
+    }
+   
+    INFO_OUT("processset:%d\n",processset);
+    if (processset) {
+        if ( (temp = strtok(NULL," ")) ) {
+            key = temp;
+            INFO_OUT("key:%s\n",key);
+        }       
+        int j = 0;
+        size_t num = 0;
+        while( (temp = strtok(NULL," ")) ) {
+            j++;
+            if (j == 2) {
+                temp = strtok(NULL," ");
+                num = atoi(temp);
+                break;
+            }
+        }
+        if (num<=0) {
+            write_msg(buf_event,client,not_stored);
+            return;
+        }
+        val = evbuffer_readln(buf, &num, EVBUFFER_EOL_CRLF_STRICT);
+        if(!val) {
+            // No data, or data has arrived, but no end-of-line was found
+            write_msg(buf_event,client,not_stored);
+            return;
+        }
+        INFO_OUT("Read a val line of length %zd from client on fd %d: %s\n", strlen(val), client->fd, val);
+        write_msg(buf_event,client,stored);
+        free(val);
+        free(cmdline);
+        return;
+    }
+    //process other one line command
+    if (strcmp(cmd,"quit") == 0) {
+        INFO_OUT("Close client on fd: %d\n", client->fd);
+        closeClient(client);//?auto free cmdline on close?
+        return;
+    }
+    if (strcmp(cmd,"get") == 0) {
+
+    }
+    else {
+        write_msg(buf_event,client,error);
+    }
+    free(cmdline);
+}
 
 
+void buffered_on_read_new(struct bufferevent *bev, void *arg) {
+    client_t *client = (client_t *)arg;
+    //char data[4096];
+    char resp[8] = {'S','T','O','R','E','D',13,10};    
+    int nbytes;
+    char *line;
+    char *response;
 
+    /* If we have input data, the number of bytes we have is contained in
+     * bev->input->off. Copy the data from the input buffer to the output
+     * buffer in 4096-byte chunks. There is a one-liner to do the whole thing
+     * in one shot, but the purpose of this server is to show actual real-world
+     * reading and writing of the input and output buffers, so we won't take
+     * that shortcut here. */
+    struct evbuffer *input;
+    input = bufferevent_get_input(bev);
+    //line = evbuffer_readln(input, NULL, EVBUFFER_EOL_ANY );
+        //nbytes = evbuffer_remove(input, data, 4096);
+      //  printf("fd:%d lines:%s\n", client->fd,line);  
+    size_t len = evbuffer_get_length(input);  
+    char data[len];
+    evbuffer_remove(input, data, len);
+    
+    response = handle_read(data,len);
+    
+    evbuffer_add(client->output_buffer, resp, sizeof(resp));
+    //while (evbuffer_get_length(input) > 0) {
 
+        /* Remove a chunk of data from the input buffer, copying it into our
+         * local array (data). */
+        //line = evbuffer_readln(input, NULL, EVBUFFER_EOL_ANY );
+        //nbytes = evbuffer_remove(input, data, 4096);
+        //printf("fd:%d line:%s\n", client->fd,data);
+        //free(line);
+        //printf("data:%.*s\n",nbytes,data);
+        //printf("resp:%.*s\n",8,resp);
+        /* Add the chunk of data from our local array (data) to the client's
+         * output buffer. */
+        //evbuffer_add(client->output_buffer, data, nbytes);
+        //evbuffer_add(client->output_buffer, resp, 8);
+    //}
 
-
+    /* Send the results to the client.  This actually only queues the results
+     * for sending. Sending will occur asynchronously, handled by libevent. */
+    if (bufferevent_write_buffer(bev, client->output_buffer)) {
+        errorOut("Error sending data to client on fd %d\n", client->fd);
+        closeClient(client);
+    }
+}
 
 /**
  * Called by libevent when there is data to read.
  */
-void buffered_on_read(struct bufferevent *bev, void *arg) {
+void buffered_on_read_old(struct bufferevent *bev, void *arg) {
     client_t *client = (client_t *)arg;
     char data[4096];
     char resp[8] = {'S','T','O','R','E','D',13,10};    
@@ -245,7 +463,7 @@ void on_accept(evutil_socket_t fd, short ev, void *arg) {
         closeAndFreeClient(client);
         return;
     }
-    bufferevent_setcb(client->buf_ev, buffered_on_read, buffered_on_write,
+    bufferevent_setcb(client->buf_ev, buffered_on_read_new, buffered_on_write,
                       buffered_on_error, client);
 
     /* We have to enable it before our callbacks will be

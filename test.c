@@ -3,7 +3,7 @@
 #include <string.h>
 #include "commands.h"
 
-
+//gcc -o test test.c commands.c && ./test
 int process(char *input) {
     char *command;
     char *string = strdup(input);
@@ -24,7 +24,8 @@ int process(char *input) {
 }
 
 int main(void) {
-    char* str = "set key 0 0 3\r\n123\r\n";
+    //char* str = "set key 0 0 3\r\n123\r\n";
+    char* str = "get key\r\n";
     char *res = handle_read(str,strlen(str));
     printf("res:%s\n",res);
     //process(str);

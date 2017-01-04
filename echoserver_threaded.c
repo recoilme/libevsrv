@@ -275,45 +275,18 @@ void buffered_on_read(struct bufferevent *buf_event, void *arg)
 
 void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     client_t *client = (client_t *)arg;
-    //char data[4096];
-    char resp[8] = {'S','T','O','R','E','D',13,10};    
-    int nbytes;
-    char *line;
+    char resp[8] = {'S','T','O','R','E','D',13,10};
     char *response;
-
-    /* If we have input data, the number of bytes we have is contained in
-     * bev->input->off. Copy the data from the input buffer to the output
-     * buffer in 4096-byte chunks. There is a one-liner to do the whole thing
-     * in one shot, but the purpose of this server is to show actual real-world
-     * reading and writing of the input and output buffers, so we won't take
-     * that shortcut here. */
     struct evbuffer *input;
+
     input = bufferevent_get_input(bev);
-    //line = evbuffer_readln(input, NULL, EVBUFFER_EOL_ANY );
-        //nbytes = evbuffer_remove(input, data, 4096);
-      //  printf("fd:%d lines:%s\n", client->fd,line);  
     size_t len = evbuffer_get_length(input);  
     char data[len];
     evbuffer_remove(input, data, len);
     
     response = handle_read(data,len);
     
-    evbuffer_add(client->output_buffer, resp, sizeof(resp));
-    //while (evbuffer_get_length(input) > 0) {
-
-        /* Remove a chunk of data from the input buffer, copying it into our
-         * local array (data). */
-        //line = evbuffer_readln(input, NULL, EVBUFFER_EOL_ANY );
-        //nbytes = evbuffer_remove(input, data, 4096);
-        //printf("fd:%d line:%s\n", client->fd,data);
-        //free(line);
-        //printf("data:%.*s\n",nbytes,data);
-        //printf("resp:%.*s\n",8,resp);
-        /* Add the chunk of data from our local array (data) to the client's
-         * output buffer. */
-        //evbuffer_add(client->output_buffer, data, nbytes);
-        //evbuffer_add(client->output_buffer, resp, 8);
-    //}
+    evbuffer_add(client->output_buffer, response, strlen(response));
 
     /* Send the results to the client.  This actually only queues the results
      * for sending. Sending will occur asynchronously, handled by libevent. */

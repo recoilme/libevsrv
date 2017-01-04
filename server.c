@@ -559,6 +559,6 @@ static void sighandler(int signal) {
 
 /* Main function for demonstrating the echo server.
  * You can remove this and simply call runServer() from your application. */
-int main(int argc, char *argv[]) {
-    return runServer();
-}
+//int main(int argc, char *argv[]) {
+//    return runServer();
+//}

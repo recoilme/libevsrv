@@ -3,3 +3,5 @@
 echoserver_threaded
 echoserver_threaded.dSYM/
 test
+_test/
+pudge

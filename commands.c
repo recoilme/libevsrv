@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "shared.h"
+#include "sophia.h"
+
 #define INFO_OUT(...) {\
 	printf("%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
 	printf(__VA_ARGS__);\
@@ -34,16 +37,28 @@ struct command {
 
 static char *set_func(struct command *command, const char *data, size_t len)
 {
+    char *key;
     char *value;
     size_t endline;
-    endline = strcspn(data, "\r\n");
+    data+=4;//'set '
+    endline = strcspn(data, " \r\n");
     if (endline > 0) {
-        data+=endline+2;
+        key = strndup_p(data,endline);   
         endline = strcspn(data, "\r\n");
         if (endline > 0) {
-            value = strndup_p(data,endline);
-            free(value);
-            return "STORED\r\n";
+            data+=endline+2;
+            endline = strcspn(data, "\r\n");
+            if (endline > 0) {
+                value = strndup_p(data,endline);
+                void *o = sp_document(db);
+                sp_setstring(o, "key", &key, strlen(key));
+                sp_setstring(o, "value", &value, strlen(value));
+                int res = sp_set(db, o);
+                free(value);
+                if (res == 0) {
+                    return "STORED\r\n";
+                }       
+            }
         }
     }
     return "NOT_STORED\r\n";
@@ -96,12 +111,36 @@ static char *set_func(struct command *command, const char *data, size_t len)
 
 static char *get_func(struct command *command, const char *data, size_t len) {
     char *key;
+    char *val;
+    char *ptr;
     char resp[256];
+    int size;
     data+=4;//'get '
     size_t cmdend = strcspn(data, " \r\n");
     if (cmdend > 0) {
         key = strndup_p(data,cmdend);
-        snprintf(resp, sizeof(resp),"%s%s%s%s","VALUE ",key," 0 0\r\n","END\r\n");
+
+        /* get */
+        void *o = sp_document(db);
+        sp_setstring(o, "key", &key, strlen(key));
+        o = sp_get(db, o);
+        if (o) {
+            /* ensure key and value are correct */
+            //int size;
+            //char *ptr = sp_getstring(o, "key", &size);
+            //assert(size == sizeof(uint32_t));
+            //assert(*(uint32_t*)ptr == key);
+
+            ptr = sp_getstring(o, "value", &size);
+            //assert(size == sizeof(uint32_t));
+            //assert(*(uint32_t*)ptr == key);
+            printf("ptr:%s\n",(char*)ptr);
+            val = (char*)ptr;//strndup_p(ptr,size);
+            sp_destroy(o);
+            //return *(char*)ptr;
+        }        
+        
+        snprintf(resp, sizeof(resp),"%s%s%s%d%s%s%s","VALUE ",key," 0 ",size,"\r\n",val,"\r\nEND\r\n");
         //printf("key:%s%lu",resp,sizeof(resp));
         free(key);
         return strndup_p(resp,sizeof(resp));

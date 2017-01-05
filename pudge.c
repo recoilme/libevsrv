@@ -5,6 +5,7 @@
 
 #include "server.h"
 #include "sophia.h"
+#include "shared.h"
 
 void *env;
 void *db;

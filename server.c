@@ -284,10 +284,10 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     char data[len];
     evbuffer_remove(input, data, len);
     
-    //response = handle_read(data,len);
+    response = handle_read(data,len);
     
-    evbuffer_add(client->output_buffer, resp, sizeof(resp));
-    //evbuffer_add(client->output_buffer, response, strlen(response));
+    //evbuffer_add(client->output_buffer, resp, sizeof(resp));
+    evbuffer_add(client->output_buffer, response, strlen(response));
 
     /* Send the results to the client.  This actually only queues the results
      * for sending. Sending will occur asynchronously, handled by libevent. */

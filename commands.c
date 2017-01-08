@@ -51,9 +51,10 @@ static char *set_func(struct command *command, const char *data, size_t len)
             if (endline > 0) {
                 value = strndup_p(data,endline);
                 void *o = sp_document(db);
-                sp_setstring(o, "key", &key, strlen(key));
-                sp_setstring(o, "value", &value, strlen(value));
+                sp_setstring(o, "key", &key[0], strlen(key));
+                sp_setstring(o, "value", &value[0], strlen(value));
                 int res = sp_set(db, o);
+                //printf("key:%s value:%s res:%d\n",key,value,res);
                 free(value);
                 if (res == 0) {
                     return "STORED\r\n";
@@ -119,25 +120,15 @@ static char *get_func(struct command *command, const char *data, size_t len) {
     size_t cmdend = strcspn(data, " \r\n");
     if (cmdend > 0) {
         key = strndup_p(data,cmdend);
-
         /* get */
         void *o = sp_document(db);
-        sp_setstring(o, "key", &key, strlen(key));
+        sp_setstring(o, "key", &key[0], strlen(key));
         o = sp_get(db, o);
         if (o) {
-            /* ensure key and value are correct */
-            //int size;
-            //char *ptr = sp_getstring(o, "key", &size);
-            //assert(size == sizeof(uint32_t));
-            //assert(*(uint32_t*)ptr == key);
-
             ptr = sp_getstring(o, "value", &size);
-            //assert(size == sizeof(uint32_t));
-            //assert(*(uint32_t*)ptr == key);
-            printf("ptr:%s\n",(char*)ptr);
+            //printf("key:%s value:%s res:%d\n",key,ptr,size);
             val = (char*)ptr;//strndup_p(ptr,size);
             sp_destroy(o);
-            //return *(char*)ptr;
         }        
         
         snprintf(resp, sizeof(resp),"%s%s%s%d%s%s%s","VALUE ",key," 0 ",size,"\r\n",val,"\r\nEND\r\n");

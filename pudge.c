@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
+#include <string.h>
 
 #include "server.h"
 #include "sophia.h"
@@ -19,34 +20,34 @@ int init() {
     return sp_open(env);
 }
 
-int db_set(uint32_t key) {
+int db_set(char *key,char *val) {
     /* set */
 	void *o = sp_document(db);
-	sp_setstring(o, "key", &key, sizeof(key));
-	sp_setstring(o, "value", &key, sizeof(key));
+	sp_setstring(o, "key", &key[0], strlen(key));
+	sp_setstring(o, "value", &val[0], strlen(val));
 	return sp_set(db, o);
 }
 
-uint32_t db_get(uint32_t key) {
+char *db_get(char *key) {
 	/* get */
 	void *o = sp_document(db);
-	sp_setstring(o, "key", &key, sizeof(key));
+	sp_setstring(o, "key", &key[0], strlen(key));
 	o = sp_get(db, o);
 	if (o) {
 		/* ensure key and value are correct */
 		int size;
-		char *ptr = sp_getstring(o, "key", &size);
-		assert(size == sizeof(uint32_t));
-		assert(*(uint32_t*)ptr == key);
+		char *ptr = sp_getstring(o, "value", &size);
+		//assert(size == strlen(key));
+		//assert(*(char*)ptr == key);
 
-		ptr = sp_getstring(o, "value", &size);
-		assert(size == sizeof(uint32_t));
-		assert(*(uint32_t*)ptr == key);
+		//ptr = sp_getstring(o, "value", &size);
+		//assert(size == strlen(val));
+		//assert(*(char*)ptr == key);
 
 		sp_destroy(o);
-        return *(uint32_t*)ptr;
+        return ptr;//*(char*)ptr;
 	}
-    return -1;
+    return "";
 }
 
 int db_del(uint32_t key) {
@@ -64,14 +65,14 @@ int main(int argc, char *argv[])
 	if (init() == -1)
 		goto error;
 
-    if (db_set(2) == -1)
+    if (db_set("hello","world") == -1)
 		goto error;
 
-    uint32_t val = db_get(2);
-    printf("val:%d\n",val);
+    char *val = db_get("hello");
+    printf("val:%s\n",val);
 
-	if (db_del(2) == -1)
-		goto error;
+	//if (db_del(2) == -1)
+	//	goto error;
     runServer();
 	/* finish work */
 	sp_destroy(env);

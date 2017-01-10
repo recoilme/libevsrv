@@ -63,58 +63,13 @@ static char *set_func(struct command *command, const char *data, size_t len)
         }
     }
     return "NOT_STORED\r\n";
-    /*
-    token = strtok(cmdline, " ");
-    if (!token) {
-        free(cmdline);
-        return "NOT_STORED\r\n";
-    }
-    int j = 0;
-    size = 0;
-    while( (token = strtok(NULL," ")) ) {
-        j++;
-        if (j == 4) {
-            size = strtol(token,NULL,10);
-            copy2 = token;
-            //printf("SIZE:%ld\n",size);
-            break;
-        }
-    }
-    if (endline > 0) {
-        free(cmdline);
-    }
-
-    
-    if (size > 0) {
-        //no need cmdline more
-        data+=endline+2;
-        //if (size>10) printf("value_size:%s\n",value);
-        
-        endline = strcspn(data, "\r\n");
-        
-        if (endline > 0) {
-            value = strndup_p(data,endline);
-            if (size != endline) {
-                printf("endline:%zu size:%zu data:'%s' copu2:'%s' \n",endline,size,copy,copy2);
-                free(copy);
-            }
-            //printf("v-a-l-u-e:%s\n",value);
-            free(value);
-        }
-    }
-    else {
-        return "NOT_STORED\r\n";
-    }
-    
-    return "STORED\r\n";
-    */
 }
 
 static char *get_func(struct command *command, const char *data, size_t len) {
     char *key;
     char *val;
     char *ptr;
-    char resp[256];
+    char *resp;
     int size;
     data+=4;//'get '
     size_t cmdend = strcspn(data, " \r\n");
@@ -130,18 +85,24 @@ static char *get_func(struct command *command, const char *data, size_t len) {
             val = (char*)ptr;//strndup_p(ptr,size);
             sp_destroy(o);
         }        
-        
-        snprintf(resp, sizeof(resp),"%s%s%s%d%s%s%s","VALUE ",key," 0 ",size,"\r\n",val,"\r\nEND\r\n");
+        char *format = "VALUE %s 0 %d\r\n%s\r\nEND\r\n";
+        resp = malloc(strlen(format)*2 + size);
+        snprintf(resp, (strlen(format)*2 + size),format,key,size,val);
         //printf("key:%s%lu",resp,sizeof(resp));
         free(key);
-        return strndup_p(resp,sizeof(resp));
+        return resp;//strndup_p(resp,sizeof(resp));
     }
     return "ERROR\r\n";
 }
 
+static char *quit_func(struct command *command, const char *data, size_t len) {
+    return "quit";
+}
+
 static struct command commands[] = {
 	{ "set", "set key 0 0 5\r\nvalue\r\n", set_func },
-    { "get", "get key\r\n", get_func }
+    { "get", "get key\r\n", get_func },
+    { "quit", "quit\r\n", quit_func }
 };
 
 size_t strpos(const char *data,char *needle) {

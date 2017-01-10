@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "commands.h"
+//#include "commands.h"
 
 //gcc -o test test.c commands.c && ./test
 int process(char *input) {
@@ -26,8 +26,17 @@ int process(char *input) {
 int main(void) {
     //char* str = "set key 0 0 3\r\n123\r\n";
     char* str = "get key\r\n";
-    char *res = handle_read(str,strlen(str));
-    printf("res:%s\n",res);
+    //char *res = handle_read(str,strlen(str));
+    //printf("res:%s\n",res);
     //process(str);
+    //snprintf(resp, sizeof(resp),"%s%s%s%d%s%s%s","VALUE ",key," 0 ",size,"\r\n",val,"\r\nEND\r\n");
+    char *format = "VALUE %s 0 %d\r\n%s\r\n";
+    char *value = "1234567890";
+    char *buffer;
+    char *len = snprintf(resp, sizeof(resp),
+    size_t size = 0;
+    size = strlen(format) + strlen(value);
+    buffer = malloc(size);
+    printf("len:%lu\n",size);
     return 0;
 }

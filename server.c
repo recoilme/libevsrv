@@ -283,9 +283,13 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     size_t len = evbuffer_get_length(input);  
     char data[len];
     evbuffer_remove(input, data, len);
-    
+    INFO_OUT("request:'%.*s'\n", (int)len,data);
     response = handle_read(data,len);
-    
+    INFO_OUT("response:'%.*s' strlen:%d\n", (int) strlen(response),response, (int) strlen(response));
+    if(!strcmp(response, "quit")) {
+        closeClient(client);
+        return;
+    }
     //evbuffer_add(client->output_buffer, resp, sizeof(resp));
     evbuffer_add(client->output_buffer, response, strlen(response));
 

@@ -33,7 +33,7 @@ int main(void) {
     char *format = "VALUE %s 0 %d\r\n%s\r\n";
     char *value = "1234567890";
     char *buffer;
-    char *len = snprintf(resp, sizeof(resp),
+    //char *len = snprintf(resp, sizeof(resp),
     size_t size = 0;
     size = strlen(format) + strlen(value);
     buffer = malloc(size);

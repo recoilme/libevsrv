@@ -280,18 +280,28 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     struct evbuffer *input;
 
     input = bufferevent_get_input(bev);
-    size_t len = evbuffer_get_length(input);  
-    char data[len];
-    evbuffer_remove(input, data, len);
-    INFO_OUT("request:'%.*s'\n", (int)len,data);
-    response = handle_read(data,len);
-    INFO_OUT("response:'%.*s' strlen:%d\n", (int) strlen(response),response, (int) strlen(response));
-    if(!strcmp(response, "quit")) {
+    int len = evbuffer_get_length(input);  
+    //char data[len];
+    char *data;
+    data = malloc(len);
+    INFO_OUT("pointer1:%p\n",(void*)data);
+    if (!data) {
+        //out of memory error
         closeClient(client);
         return;
     }
+    evbuffer_remove(input, data, len);
+    
+    INFO_OUT("request:'%.*s'\n", (int)len,data);
+    
+    handle_read(&data, &len); 
+    
+    INFO_OUT("response:'%.*s' strlen:%d\n", len, data, len);
+    //free(data);
+    
+    
     //evbuffer_add(client->output_buffer, resp, sizeof(resp));
-    evbuffer_add(client->output_buffer, response, strlen(response));
+    evbuffer_add(client->output_buffer, data, len);
 
     /* Send the results to the client.  This actually only queues the results
      * for sending. Sending will occur asynchronously, handled by libevent. */
@@ -299,6 +309,8 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
         errorOut("Error sending data to client on fd %d\n", client->fd);
         closeClient(client);
     }
+    INFO_OUT("pointer2:%p\n",(void*)data);
+    free(data);
 }
 
 /**

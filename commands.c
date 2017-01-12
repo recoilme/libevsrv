@@ -29,114 +29,161 @@ static char *strndup_p(const char *str, size_t len)
 	return newstr;
 }
 
+int get_int_len (int value){
+  int l=1;
+  while(value>9){ l++; value/=10; }
+  return l;
+}
+
 struct command {
 	char *name;
 	char *desc;
-	char* (*func)(struct command *command, const char *data, size_t len);
+	int (*func)(struct command *command, char** data, int* len);
 };
 
-static char *set_func(struct command *command, const char *data, size_t len)
-{
+
+static int set_func(struct command *command, char** data, int* len) {
+    printf("set data:'%s'\n",*data);
     char *key;
     char *value;
+    char *result;
+    int shift = 0;
     size_t endline;
-    data+=4;//'set '
-    endline = strcspn(data, " \r\n");
-    if (endline > 0) {
-        key = strndup_p(data,endline);   
-        endline = strcspn(data, "\r\n");
-        if (endline > 0) {
-            data+=endline+2;
-            endline = strcspn(data, "\r\n");
-            if (endline > 0) {
-                value = strndup_p(data,endline);
+    result =  "NOT_STORED\r\n";
+    shift+=4;
+    //INFO_OUT("pointer:%p\n",(void*)*data);
+    *data+=4;//'set '
+    *len-=4;
+    endline = strcspn(*data, " \r\n");
+    if (endline < *len) {
+        key = strndup_p(*data,endline);   
+        endline = strcspn(*data, "\r\n");
+        if (endline < *len) {
+            shift+=endline+2;
+            *data+=endline+2;
+            *len-=endline+2;
+            endline = strcspn(*data, "\r\n");
+            if (endline < *len) {
+                value = strndup_p(*data,endline);
                 void *o = sp_document(db);
                 sp_setstring(o, "key", &key[0], strlen(key));
                 sp_setstring(o, "value", &value[0], strlen(value));
                 int res = sp_set(db, o);
-                //printf("key:%s value:%s res:%d\n",key,value,res);
+                INFO_OUT("key:%s value:%s res:%d\n",key,value,res);
                 free(value);
+                free(key);
                 if (res == 0) {
-                    return "STORED\r\n";
-                }       
+                    result = "STORED\r\n";
+                }
             }
         }
     }
-    return "NOT_STORED\r\n";
+    INFO_OUT("data:'%.*s'\n", *len,*data);
+    //move pointer on original address
+    *data-=shift;
+    //realloc
+    *len = strlen(result);
+    *data = realloc(*data,*len);
+    if (!data) {
+        //error in realloc
+        return -1;
+    }
+    memcpy(*data,result,*len);
+    //success processed
+    return 0;
 }
 
-static char *get_func(struct command *command, const char *data, size_t len) {
-    char *key;
-    char *val;
+
+
+static int get_func(struct command* command, char** data, int* len) {
+    char *key = NULL;
+    char *val = NULL;
     char *ptr;
-    char *resp;
+    char *resp = NULL;
     int size;
-    data+=4;//'get '
-    size_t cmdend = strcspn(data, " \r\n");
-    if (cmdend > 0) {
-        key = strndup_p(data,cmdend);
-        /* get */
+    int shift = 0;
+    shift+=4;
+    *data+=4;//'get '
+    size_t cmdend = strcspn(*data, " \r\n");
+    INFO_OUT("cmdend:%d\n",(int)cmdend);
+    if (cmdend <= *len) {
+        key = strndup_p(*data,cmdend);
+        INFO_OUT("key:'%.*s'\n", (int)strlen(key),key);
+        *data-=shift;
+        // get 
+        
         void *o = sp_document(db);
         sp_setstring(o, "key", &key[0], strlen(key));
         o = sp_get(db, o);
         if (o) {
             ptr = sp_getstring(o, "value", &size);
-            //printf("key:%s value:%s res:%d\n",key,ptr,size);
-            val = (char*)ptr;//strndup_p(ptr,size);
+            val = strndup_p((char*)ptr,size);
+            if (!val) {
+                goto error;
+            }
             sp_destroy(o);
+        }
+        else {
+            val = "";
+            //TODO return empty string for val?
         }        
+        INFO_OUT("val:'%.*s'\n", size,val);
+        
         char *format = "VALUE %s 0 %d\r\n%s\r\nEND\r\n";
-        resp = malloc(strlen(format)*2 + size);
-        snprintf(resp, (strlen(format)*2 + size),format,key,size,val);
-        //printf("key:%s%lu",resp,sizeof(resp));
+        int resp_size = (strlen(format) -3*2/* % exclude */) + strlen(key) + size + get_int_len(size) + 1/* \0*/;
+        resp = malloc(resp_size);
+        snprintf(resp, resp_size,format,key,size,val);
+        INFO_OUT("resp:'%.*s' %d\n", resp_size,resp,resp_size);
+        //realloc
+        *len = resp_size-1;//\0 remove
+        *data = realloc(*data,*len);
+        if (!data) {
+            //error in realloc
+            goto error;
+        }
+        memcpy(*data,resp,*len);
+        if (strcmp(val,"")) free(val);
         free(key);
-        return resp;//strndup_p(resp,sizeof(resp));
+        free(resp);
+        //success processed
+        return 0;
     }
-    return "ERROR\r\n";
-}
-
-static char *quit_func(struct command *command, const char *data, size_t len) {
-    return "quit";
+error:;
+    free(val);
+    free(key);
+    free(resp);
+    return -1;
 }
 
 static struct command commands[] = {
 	{ "set", "set key 0 0 5\r\nvalue\r\n", set_func },
-    { "get", "get key\r\n", get_func },
-    { "quit", "quit\r\n", quit_func }
+    { "get", "get key\r\n", get_func }//,
+    //{ "quit", "quit\r\n", quit_func }
 };
 
-size_t strpos(const char *data,char *needle) {
-    size_t pos = -1;
-    char *p = strstr(data, needle);
-    if (p) pos = p - data;
-    return pos;
-}
-
-char *handle_read(const char *data,size_t len) {
-    //printf("msg:%.*s\n",(int)len,data);
-    char *cmd;
-    char *result;
-    char error[] = "ERROR\r\n";
-    
-    size_t cmdend = strcspn(data, " \r\n");
-    if (cmdend > 0) {
-        cmd = strndup_p(data,cmdend);
-        //printf("cmd:%s\n",cmd);
+//you must free data ater use
+void handle_read(char** data,int* len) {
+    int processed = -1;
+    //min cmd len 4
+    if (*len > 3) {
+        size_t cmdend = strcspn(*data, " \r\n");
+        char *cmd = strndup_p(*data,cmdend);
+        INFO_OUT("Command:%s\n", cmd);
+        // Execute the command, if it is valid
+        int i;
+        for(i = 0; i < ARRAY_SIZE(commands); i++) {
+            if(!strcmp(cmd, commands[i].name)) {
+                //INFO_OUT("Running command %s\n", commands[i].name);
+                processed = commands[i].func(&commands[i], data, len);
+                break;
+            }
+        }
     }
-	// Execute the command, if it is valid
-    int i;
-	for(i = 0; i < ARRAY_SIZE(commands); i++) {
-		if(!strcmp(cmd, commands[i].name)) {
-			//INFO_OUT("Running command %s\n", commands[i].name);
-			result = commands[i].func(&commands[i], data, len);
-			break;
-		}
+    if (processed != 0) {
+        //no commands
+        char *result="ERROR\r\n";
+        *data = realloc(*data,strlen(result));
+        memcpy(*data,result,strlen(result));
+        *len = strlen(result);
     }
-    if(i == ARRAY_SIZE(commands)) {
-        result = strndup_p(error,sizeof(error));
-    }
-    if (cmdend) {
-        free(cmd);
-    }
-    return result;
 }

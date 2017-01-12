@@ -5,36 +5,6 @@
 #include "shared.h"
 #include "sophia.h"
 
-#define INFO_OUT(...) {\
-	printf("%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
-	printf(__VA_ARGS__);\
-}
-// Size of array (Caution: references its parameter multiple times)
-#define ARRAY_SIZE(array) (sizeof((array)) / sizeof((array)[0]))
-
-// str must have at least len bytes to copy
-static char *strndup_p(const char *str, size_t len)
-{
-	char *newstr;
-
-	newstr = malloc(len + 1);
-	if(newstr == NULL) {
-        printf("ERROR ALOCATE%zu\n",len);
-		return NULL;
-	}
-
-	memcpy(newstr, str, len);
-	newstr[len] = 0;
-
-	return newstr;
-}
-
-int get_int_len (int value){
-  int l=1;
-  while(value>9){ l++; value/=10; }
-  return l;
-}
-
 struct command {
 	char *name;
 	char *desc;
@@ -43,13 +13,15 @@ struct command {
 
 
 static int set_func(struct command *command, char** data, int* len) {
-    printf("set data:'%s'\n",*data);
+
     char *key;
     char *value;
     char *result;
+    int res = -1;
     int shift = 0;
     size_t endline;
-    result =  "NOT_STORED\r\n";
+    result =  malloc(strlen(ST_NOTSTORED));
+    memcpy(result,ST_NOTSTORED,strlen(ST_NOTSTORED));
     shift+=4;
     //INFO_OUT("pointer:%p\n",(void*)*data);
     *data+=4;//'set '
@@ -68,12 +40,13 @@ static int set_func(struct command *command, char** data, int* len) {
                 void *o = sp_document(db);
                 sp_setstring(o, "key", &key[0], strlen(key));
                 sp_setstring(o, "value", &value[0], strlen(value));
-                int res = sp_set(db, o);
+                res = sp_set(db, o);
                 INFO_OUT("key:%s value:%s res:%d\n",key,value,res);
                 free(value);
                 free(key);
                 if (res == 0) {
-                    result = "STORED\r\n";
+                    result = realloc(result,strlen(ST_STORED));
+                    memcpy(result,ST_STORED,strlen(ST_STORED));
                 }
             }
         }
@@ -81,14 +54,18 @@ static int set_func(struct command *command, char** data, int* len) {
     INFO_OUT("data:'%.*s'\n", *len,*data);
     //move pointer on original address
     *data-=shift;
+    //size (success or not)
+    if (res == 0) *len = strlen(ST_STORED);
+    else *len = strlen(ST_NOTSTORED);
     //realloc
-    *len = strlen(result);
     *data = realloc(*data,*len);
     if (!data) {
+        free(result);
         //error in realloc
         return -1;
     }
     memcpy(*data,result,*len);
+    free(result);
     //success processed
     return 0;
 }
@@ -164,26 +141,24 @@ static struct command commands[] = {
 //you must free data ater use
 void handle_read(char** data,int* len) {
     int processed = -1;
-    //min cmd len 4
-    if (*len > 3) {
-        size_t cmdend = strcspn(*data, " \r\n");
-        char *cmd = strndup_p(*data,cmdend);
-        INFO_OUT("Command:%s\n", cmd);
-        // Execute the command, if it is valid
-        int i;
-        for(i = 0; i < ARRAY_SIZE(commands); i++) {
-            if(!strcmp(cmd, commands[i].name)) {
-                //INFO_OUT("Running command %s\n", commands[i].name);
-                processed = commands[i].func(&commands[i], data, len);
-                break;
-            }
+
+    size_t cmdend = strcspn(*data, " \r\n");
+    char *cmd = strndup_p(*data,cmdend);
+    INFO_OUT("Command:%s\n", cmd);
+    // Execute the command, if it is valid
+    int i;
+    for(i = 0; i < ARRAY_SIZE(commands); i++) {
+        if(!strcmp(cmd, commands[i].name)) {
+            //INFO_OUT("Running command %s\n", commands[i].name);
+            processed = commands[i].func(&commands[i], data, len);
+            break;
         }
     }
+    free(cmd);
     if (processed != 0) {
         //no commands
-        char *result="ERROR\r\n";
-        *data = realloc(*data,strlen(result));
-        memcpy(*data,result,strlen(result));
-        *len = strlen(result);
+        *len = strlen(ST_ERROR);
+        *data = realloc(*data,*len);
+        memcpy(*data,ST_ERROR,*len);
     }
 }

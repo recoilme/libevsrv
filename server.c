@@ -28,6 +28,7 @@
 
 #include "commands.h"
 #include "workqueue.h"
+#include "shared.h"
 
 /* Port to listen on. */
 #define SERVER_PORT 5555
@@ -36,37 +37,6 @@
 /* Number of worker threads.  Should match number of CPU cores reported in 
  * /proc/cpuinfo. */
 #define NUM_THREADS 8
-
-/* Behaves similarly to fprintf(stderr, ...), but adds file, line, and function
- information. */
-#define errorOut(...) {\
-    fprintf(stderr, "%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
-    fprintf(stderr, __VA_ARGS__);\
-}
-
-// Behaves similarly to printf(...), but adds file, line, and function
-// information.  I omit do ... while(0) because I always use curly braces in my
-// if statements.
-#define INFO_OUT(...) {\
-	printf("%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
-	printf(__VA_ARGS__);\
-}
-
-// Behaves similarly to fprintf(stderr, ...), but adds file, line, and function
-// information.
-#define ERROR_OUT(...) {\
-	fprintf(stderr, "\e[0;1m%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
-	fprintf(stderr, __VA_ARGS__);\
-	fprintf(stderr, "\e[0m");\
-}
-
-// Behaves similarly to perror(...), but supports printf formatting and prints
-// file, line, and function information.
-#define ERRNO_OUT(...) {\
-	fprintf(stderr, "\e[0;1m%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
-	fprintf(stderr, __VA_ARGS__);\
-	fprintf(stderr, ": %d (%s)\e[0m\n", errno, strerror(errno));\
-}
 
 /**
  * Struct to carry around connection (client)-specific data.
@@ -86,7 +56,7 @@ typedef struct client {
 
     /* Here you can add your own application-specific attributes which
      * are connection-specific. */
-    long valsize;
+    int command;
 } client_t;
 
 static struct event_base *evbase_accept;
@@ -169,108 +139,6 @@ void write_msg(struct bufferevent *buf_event, struct client *client, const char 
         closeClient(client);
     }
 }
-/**
- * Called by libevent when there is data to read.
- */
-void buffered_on_read(struct bufferevent *buf_event, void *arg)
-{
-    char *cmdline;
-    char *temp;
-    char *cmd;
-    char *key;
-    char *val;
-    int processset = 0;
-    struct evbuffer *buf;
-
-    const char stored[8] = {'S','T','O','R','E','D',13,10};
-    const char not_stored[12] = {'N','O','T','_','S','T','O','R','E','D',13,10}; 
-    const char error[7] = {'E','R','R','O','R',13,10};
-    
-    buf = bufferevent_get_input(buf_event);
-    client_t *client = (client_t *)arg;
-
-    //check new line
-    int cntnl = count_instances(buf,"\n");
-    if (cntnl < 1) { 
-        //no new line, wait next portion
-        return;
-    }
-    //check set
-    processset = 0;
-    if (str_firstpos(buf,"set") == 0) {
-        if (cntnl <=1) {
-            //set without val - wait next portion
-            return;
-        }
-        else{
-            //set and more then 2 line
-            processset = 1;
-        }
-    }
-
-    cmdline = evbuffer_readln(buf, NULL, EVBUFFER_EOL_CRLF_STRICT);
-    if(!cmdline) {
-        return;
-    }
-    else {
-        INFO_OUT("Read a line of length %zd from client on fd %d: %s\n", strlen(cmdline), client->fd, cmdline);
-    }
-    temp = strtok(cmdline, " ");
-    if (!temp) {
-        errorOut("Error: Empty command\n");
-        return;
-    }
-    else{
-        cmd = temp;
-        INFO_OUT("command:%s\n",cmd);
-    }
-   
-    INFO_OUT("processset:%d\n",processset);
-    if (processset) {
-        if ( (temp = strtok(NULL," ")) ) {
-            key = temp;
-            INFO_OUT("key:%s\n",key);
-        }       
-        int j = 0;
-        size_t num = 0;
-        while( (temp = strtok(NULL," ")) ) {
-            j++;
-            if (j == 2) {
-                temp = strtok(NULL," ");
-                num = atoi(temp);
-                break;
-            }
-        }
-        if (num<=0) {
-            write_msg(buf_event,client,not_stored);
-            return;
-        }
-        val = evbuffer_readln(buf, &num, EVBUFFER_EOL_CRLF_STRICT);
-        if(!val) {
-            // No data, or data has arrived, but no end-of-line was found
-            write_msg(buf_event,client,not_stored);
-            return;
-        }
-        INFO_OUT("Read a val line of length %zd from client on fd %d: %s\n", strlen(val), client->fd, val);
-        write_msg(buf_event,client,stored);
-        free(val);
-        free(cmdline);
-        return;
-    }
-    //process other one line command
-    if (strcmp(cmd,"quit") == 0) {
-        INFO_OUT("Close client on fd: %d\n", client->fd);
-        closeClient(client);//?auto free cmdline on close?
-        return;
-    }
-    if (strcmp(cmd,"get") == 0) {
-
-    }
-    else {
-        write_msg(buf_event,client,error);
-    }
-    free(cmdline);
-}
 
 
 void buffered_on_read_new(struct bufferevent *bev, void *arg) {
@@ -284,32 +152,58 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     //char data[len];
     char *data;
     data = malloc(len);
-    INFO_OUT("pointer1:%p\n",(void*)data);
+
     if (!data) {
         //out of memory error
         closeClient(client);
         return;
     }
+
     evbuffer_remove(input, data, len);
     
     INFO_OUT("request:'%.*s'\n", (int)len,data);
     
-    handle_read(&data, &len); 
-    
-    INFO_OUT("response:'%.*s' strlen:%d\n", len, data, len);
-    //free(data);
-    
-    
-    //evbuffer_add(client->output_buffer, resp, sizeof(resp));
-    evbuffer_add(client->output_buffer, data, len);
+    //ignore commands <3 len???
+    if (len > 3) {
+        //check set
+        char* buf = malloc(3);
+        memcpy(buf,data,3);
+        if (!strcmp(buf,"set")) {
+            //count \n
+            int i, count;
+            for (i=0, count=0; i < len; i++)
+                count += (data[i] == '\n');
+            INFO_OUT("Set cmd with %d n\n",count);
+            if (count == 1) {
+                //store command in client
+                char* command = malloc(len);
+                memcpy(command,data,len);
+                client->command = 18;//&command;
 
-    /* Send the results to the client.  This actually only queues the results
-     * for sending. Sending will occur asynchronously, handled by libevent. */
-    if (bufferevent_write_buffer(bev, client->output_buffer)) {
-        errorOut("Error sending data to client on fd %d\n", client->fd);
-        closeClient(client);
+                INFO_OUT("Client stored cmd: %s\n",command);
+                //and continue
+                free(data);
+                return;
+            }
+        }
+        //if (client->command) {
+            int tmp = client->command;
+            INFO_OUT("Client has cmd: %d\n",tmp);
+        //}
+        handle_read(&data, &len); 
+    
+        INFO_OUT("response:'%.*s' strlen:%d\n", len, data, len);
+    
+        //evbuffer_add(client->output_buffer, resp, sizeof(resp));
+        evbuffer_add(client->output_buffer, data, len);
+
+        /* Send the results to the client.  This actually only queues the results
+        * for sending. Sending will occur asynchronously, handled by libevent. */
+        if (bufferevent_write_buffer(bev, client->output_buffer)) {
+            errorOut("Error sending data to client on fd %d\n", client->fd);
+            closeClient(client);
+        }
     }
-    INFO_OUT("pointer2:%p\n",(void*)data);
     free(data);
 }
 
@@ -406,10 +300,13 @@ void on_accept(evutil_socket_t fd, short ev, void *arg) {
     }
     memset(client, 0, sizeof(*client));
     client->fd = client_fd;
+    
 
     /* Add any custom code anywhere from here to the end of this function
      * to initialize your application-specific attributes in the client struct.
      */
+
+     //client->command = NULL;
 
     if ((client->output_buffer = evbuffer_new()) == NULL) {
         warn("client output buffer allocation failed");

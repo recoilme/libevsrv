@@ -16,6 +16,7 @@ int init() {
     env = sp_env();
 	sp_setstring(env, "sophia.path", "_test", 0);
 	sp_setstring(env, "db", "test", 0);
+	sp_setint(env, "db.test.mmap", 1);
 	db = sp_getobject(env, "db.test");
     return sp_open(env);
 }

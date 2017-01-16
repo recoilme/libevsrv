@@ -5,6 +5,7 @@
 const char *ST_ERROR="ERROR\r\n";
 const char *ST_STORED="STORED\r\n";
 const char *ST_NOTSTORED="NOT_STORED\r\n";
+const int LOGLEVEL = 0;
 
 // str must have at least len bytes to copy
 char *strndup_p(const char *str, size_t len)

@@ -3,6 +3,7 @@ extern void* db;
 extern const char* ST_ERROR;
 extern const char* ST_STORED;
 extern const char* ST_NOTSTORED;
+extern const int LOGLEVEL;
 
 char *strndup_p(const char *str, size_t len);
 
@@ -22,8 +23,8 @@ int get_int_len (int value);
 // information.  I omit do ... while(0) because I always use curly braces in my
 // if statements.
 #define INFO_OUT(...) {\
-	printf("%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
-	printf(__VA_ARGS__);\
+	if (LOGLEVEL == 1) printf("%s:%d: %s():\t", __FILE__, __LINE__, __FUNCTION__);\
+	if (LOGLEVEL == 1) printf(__VA_ARGS__);\
 }
 
 // Behaves similarly to fprintf(stderr, ...), but adds file, line, and function

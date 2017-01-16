@@ -148,7 +148,8 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     struct evbuffer *input;
 
     input = bufferevent_get_input(bev);
-    int len = evbuffer_get_length(input);  
+    int len = evbuffer_get_length(input);
+    int buf_len = len; // copy of original buffer len
     //char data[len];
     char *data;
     data = malloc(len);
@@ -159,39 +160,12 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
         return;
     }
 
-    evbuffer_remove(input, data, len);
+    evbuffer_copyout(input, data, len);
     
     INFO_OUT("request:'%.*s'\n", (int)len,data);
     
-    //ignore commands <3 len???
-    if (len > 3) {
-        //check set
-        char* buf = malloc(3);
-        memcpy(buf,data,3);
-        if (!strcmp(buf,"set")) {
-            //count \n
-            int i, count;
-            for (i=0, count=0; i < len; i++)
-                count += (data[i] == '\n');
-            INFO_OUT("Set cmd with %d n\n",count);
-            if (count == 1) {
-                //store command in client
-                char* command = malloc(len);
-                memcpy(command,data,len);
-                client->command = 18;//&command;
-
-                INFO_OUT("Client stored cmd: %s\n",command);
-                //and continue
-                free(data);
-                return;
-            }
-        }
-        //if (client->command) {
-            int tmp = client->command;
-            INFO_OUT("Client has cmd: %d\n",tmp);
-        //}
-        handle_read(&data, &len); 
-    
+    if (handle_read(&data, &len)) {
+        evbuffer_drain(input, buf_len);
         INFO_OUT("response:'%.*s' strlen:%d\n", len, data, len);
     
         //evbuffer_add(client->output_buffer, resp, sizeof(resp));
@@ -400,6 +374,8 @@ int runServer(void) {
     listen_addr.sin_family = AF_INET;
     listen_addr.sin_addr.s_addr = INADDR_ANY;
     listen_addr.sin_port = htons(SERVER_PORT);
+    reuseaddr_on = 1;
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_on, sizeof(reuseaddr_on));
     if (bind(listenfd, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) 
         < 0) {
         err(1, "bind failed");
@@ -407,9 +383,6 @@ int runServer(void) {
     if (listen(listenfd, CONNECTION_BACKLOG) < 0) {
         err(1, "listen failed");
     }
-    reuseaddr_on = 1;
-    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_on,
-               sizeof(reuseaddr_on));
 
     /* Set the socket to non-blocking, this is essential in event
      * based programming with libevent. */

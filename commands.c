@@ -11,6 +11,17 @@ struct command {
 	int (*func)(struct command *command, char** data, int* len);
 };
 
+int find_last_of(char * str, int str_len, char template) {
+    int pos = str_len - 1;
+    while (pos >= 0) {
+        if (str[pos] == template) {
+            return pos;
+        }
+        pos--;
+    }
+    return -1;
+}
+
 
 static int set_func(struct command *command, char** data, int* len) {
 
@@ -18,25 +29,33 @@ static int set_func(struct command *command, char** data, int* len) {
     char *value;
     char *result;
     int res = -1;
-    int shift = 0;
     size_t endline;
     result =  malloc(strlen(ST_NOTSTORED));
     memcpy(result,ST_NOTSTORED,strlen(ST_NOTSTORED));
-    shift+=4;
     //INFO_OUT("pointer:%p\n",(void*)*data);
-    *data+=4;//'set '
+    char * data_cpy = *data;
+    data_cpy+=4;//'set '
     *len-=4;
-    endline = strcspn(*data, " \r\n");
+    endline = strcspn(data_cpy, " \r\n");
     if (endline < *len) {
-        key = strndup_p(*data,endline);   
-        endline = strcspn(*data, "\r\n");
-        if (endline < *len) {
-            shift+=endline+2;
-            *data+=endline+2;
+        key = strndup_p(data_cpy,endline);
+        endline = strcspn(data_cpy, "\r\n");
+        int last_ws_pos = find_last_of(data_cpy, endline, ' ');
+        if (last_ws_pos < 0) {
+            free(key);
+            return -1;
+        }
+        char value_len_str[20];
+        last_ws_pos += 1;
+        memcpy(value_len_str, data_cpy + sizeof(char) * last_ws_pos, endline - last_ws_pos);
+        value_len_str[endline - last_ws_pos] = '\0';
+        int value_len = atoi(value_len_str);
+        if (value_len <= (int)(*len - endline - 4)) {
+            data_cpy+=endline+2;
             *len-=endline+2;
-            endline = strcspn(*data, "\r\n");
+            endline = strcspn(data_cpy, "\r\n");
             if (endline < *len) {
-                value = strndup_p(*data,endline);
+                value = strndup_p(data_cpy,endline);
                 void *o = sp_document(db);
                 sp_setstring(o, "key", &key[0], strlen(key));
                 sp_setstring(o, "value", &value[0], strlen(value));
@@ -48,12 +67,18 @@ static int set_func(struct command *command, char** data, int* len) {
                     result = realloc(result,strlen(ST_STORED));
                     memcpy(result,ST_STORED,strlen(ST_STORED));
                 }
+            } else {
+                free(key);
+                return 0;
             }
+        } else {
+            free(key);
+            return 0;
         }
+    } else {
+        return 0;
     }
-    INFO_OUT("data:'%.*s'\n", *len,*data);
-    //move pointer on original address
-    *data-=shift;
+    INFO_OUT("data:'%.*s'\n", *len,data_cpy);
     //size (success or not)
     if (res == 0) *len = strlen(ST_STORED);
     else *len = strlen(ST_NOTSTORED);
@@ -67,7 +92,7 @@ static int set_func(struct command *command, char** data, int* len) {
     memcpy(*data,result,*len);
     free(result);
     //success processed
-    return 0;
+    return *len;
 }
 
 
@@ -79,14 +104,13 @@ static int get_func(struct command* command, char** data, int* len) {
     char *resp = NULL;
     int size;
     int shift = 0;
-    shift+=4;
-    *data+=4;//'get '
-    size_t cmdend = strcspn(*data, " \r\n");
-    INFO_OUT("cmdend:%d\n",(int)cmdend);
-    if (cmdend <= *len) {
-        key = strndup_p(*data,cmdend);
+    char * data_cpy = *data;
+    data_cpy+=4;//'get '
+    size_t cmdend = strcspn(data_cpy, "\r\n");
+    INFO_OUT("cmdend:%d, len = %d\n",(int)cmdend, *len);
+    if (cmdend < ((int)*len - 4)) {
+        key = strndup_p(data_cpy,cmdend);
         INFO_OUT("key:'%.*s'\n", (int)strlen(key),key);
-        *data-=shift;
         // get 
         
         void *o = sp_document(db);
@@ -123,6 +147,8 @@ static int get_func(struct command* command, char** data, int* len) {
         free(key);
         free(resp);
         //success processed
+        return *len;
+    } else {
         return 0;
     }
 error:;
@@ -139,7 +165,7 @@ static struct command commands[] = {
 };
 
 //you must free data ater use
-void handle_read(char** data,int* len) {
+size_t handle_read(char** data,int* len) {
     int processed = -1;
 
     size_t cmdend = strcspn(*data, " \r\n");
@@ -155,10 +181,12 @@ void handle_read(char** data,int* len) {
         }
     }
     free(cmd);
-    if (processed != 0) {
+    if (processed < 0) {
         //no commands
         *len = strlen(ST_ERROR);
         *data = realloc(*data,*len);
         memcpy(*data,ST_ERROR,*len);
     }
+
+    return processed != 0 ? 1 : 0;
 }

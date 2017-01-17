@@ -171,7 +171,7 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     while (handled_len > 0) {
         all_handled_len += handled_len;
         len -= handled_len;
-        INFO_OUT("response:'%.*s' strlen:%d\n", len, data, len);
+        INFO_OUT("response:'%.*s' strlen:%d\n", resp_len, resp_ptr, resp_len);
     
         //evbuffer_add(client->output_buffer, resp, sizeof(resp));
         evbuffer_add(client->output_buffer, resp_ptr, resp_len);

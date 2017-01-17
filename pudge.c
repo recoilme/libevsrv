@@ -38,6 +38,7 @@ char *db_get(char *key) {
 		/* ensure key and value are correct */
 		int size;
 		char *ptr = sp_getstring(o, "value", &size);
+		char *ptr2 = strndup_p(ptr, size);
 		//assert(size == strlen(key));
 		//assert(*(char*)ptr == key);
 
@@ -46,7 +47,7 @@ char *db_get(char *key) {
 		//assert(*(char*)ptr == key);
 
 		sp_destroy(o);
-        return ptr;//*(char*)ptr;
+        return ptr2;//*(char*)ptr;
 	}
     return "";
 }

@@ -149,7 +149,6 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
 
     input = bufferevent_get_input(bev);
     int len = evbuffer_get_length(input);
-    int buf_len = len; // copy of original buffer len
     //char data[len];
     char *data;
     data = malloc(len);
@@ -163,21 +162,40 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     evbuffer_copyout(input, data, len);
     
     INFO_OUT("request:'%.*s'\n", (int)len,data);
-    
-    if (handle_read(&data, &len)) {
-        evbuffer_drain(input, buf_len);
+
+    int all_handled_len = 0;
+    char *data_ptr = data;
+    char* resp_ptr;
+    int resp_len;
+    int handled_len = handle_read(data_ptr, len, &resp_ptr, &resp_len);
+    while (handled_len > 0) {
+        all_handled_len += handled_len;
+        len -= handled_len;
         INFO_OUT("response:'%.*s' strlen:%d\n", len, data, len);
     
         //evbuffer_add(client->output_buffer, resp, sizeof(resp));
-        evbuffer_add(client->output_buffer, data, len);
+        evbuffer_add(client->output_buffer, resp_ptr, resp_len);
 
         /* Send the results to the client.  This actually only queues the results
         * for sending. Sending will occur asynchronously, handled by libevent. */
         if (bufferevent_write_buffer(bev, client->output_buffer)) {
             errorOut("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
+            break;
+        }
+
+        if (len > 0) {
+            handled_len = handle_read(data + all_handled_len * sizeof(char), len, &resp_ptr, &resp_len);
+        } else {
+            // no more data in inpud buffer
+            break;
         }
     }
+
+    if (all_handled_len) {
+        evbuffer_drain(input, all_handled_len);
+    }
+
     free(data);
 }
 

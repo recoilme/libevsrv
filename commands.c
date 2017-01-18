@@ -77,7 +77,7 @@ static int set_func(struct command *command, char* data, int len, char** resp, i
                 free(value);
                 free(key);
                 if (res == 0) {
-                    result = realloc(result,strlen(ST_STORED));
+                    result = malloc(strlen(ST_STORED));
                     memcpy(result,ST_STORED,strlen(ST_STORED));
                     *resp_len = strlen(ST_STORED);
                 }
@@ -144,6 +144,7 @@ static int get_func(struct command* command, char* data, int len, char ** resp, 
         snprintf(*resp, *resp_size,format,key,size,val);
         INFO_OUT("resp:'%.*s' %d\n", *resp_size,*resp,*resp_size);
         if (strcmp(val,"")) free(val);
+        *resp_size -= 1; // do not send '\0' byte
         free(key);
         //success processed
         return 4 + key_len + 2;
@@ -188,9 +189,8 @@ size_t handle_read(char* data, int len, char** resp, int* resp_len) {
         //no commands
         INFO_OUT("data = '%.*s'\n", len, data);
         INFO_OUT("Command parsing exception, code: %d\n", processed);
-        exit(0);
         *resp_len = strlen(ST_ERROR);
-        *resp = realloc(*resp, *resp_len);
+        *resp = malloc(*resp_len);
         memcpy(*resp, ST_ERROR, *resp_len);
     }
 

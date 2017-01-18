@@ -151,7 +151,8 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     int len = evbuffer_get_length(input);
     //char data[len];
     char *data;
-    data = malloc(len);
+    data = malloc(len + 1);
+    data[len] = '\0';
 
     if (!data) {
         //out of memory error
@@ -183,6 +184,7 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
             closeClient(client);
             break;
         }
+        free(resp_ptr);
 
         if (len > 0) {
             handled_len = handle_read(data + all_handled_len * sizeof(char), len, &resp_ptr, &resp_len);

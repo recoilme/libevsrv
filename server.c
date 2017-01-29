@@ -264,6 +264,73 @@ void buffered_on_read_old(struct bufferevent *bev, void *arg) {
 }
 
 /**
+ * Called by libevent when there is data to read.
+ */
+void read_cb(struct bufferevent *bev, void *arg)
+{
+    #define MAX_LINE    256
+    static char msg_ok[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 2\r\n"
+        "Connection: keep-alive\r\n"
+        "Keep-Alive: 1;timeout=9\r\n"
+        "\r\n"
+        "OK"; 
+    char line[MAX_LINE+1];
+    int n;
+    client_t *client = (client_t *)arg;
+    //evutil_socket_t fd = bufferevent_getfd(bev);
+
+    while (n = bufferevent_read(bev, line, MAX_LINE), n > 0) {
+        line[n] = '\0';
+        printf("fd=%u, read line: '%s'\n", client->fd, line);
+
+        bufferevent_write(bev, msg_ok, sizeof(msg_ok)-1);
+    }
+}
+
+void buffered_on_read(struct bufferevent *bev, void *arg) {
+    client_t *client = (client_t *)arg;
+    char data[4096];
+    char resp[8] = {'S','T','O','R','E','D',13,10};
+    static char msg_ok[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 2\r\n"
+        "Connection: keep-alive\r\n"
+        "Keep-Alive: 1;timeout=9\r\n"
+        "\r\n"
+        "OK";    
+    int nbytes;
+
+    /* If we have input data, the number of bytes we have is contained in
+     * bev->input->off. Copy the data from the input buffer to the output
+     * buffer in 4096-byte chunks. There is a one-liner to do the whole thing
+     * in one shot, but the purpose of this server is to show actual real-world
+     * reading and writing of the input and output buffers, so we won't take
+     * that shortcut here. */
+    struct evbuffer *input;
+    input = bufferevent_get_input(bev);
+    while (evbuffer_get_length(input) > 0) {
+        /* Remove a chunk of data from the input buffer, copying it into our
+         * local array (data). */
+        nbytes = evbuffer_remove(input, data, 4096); 
+        //printf("data:%.*s\n",nbytes,data);
+        //printf("resp:%.*s\n",8,resp);
+        /* Add the chunk of data from our local array (data) to the client's
+         * output buffer. */
+        //evbuffer_add(client->output_buffer, data, nbytes);
+        evbuffer_add(client->output_buffer, msg_ok, sizeof(msg_ok));
+    }
+
+    /* Send the results to the client.  This actually only queues the results
+     * for sending. Sending will occur asynchronously, handled by libevent. */
+    if (bufferevent_write_buffer(bev, client->output_buffer)) {
+        errorOut("Error sending data to client on fd %d\n", client->fd);
+        closeClient(client);
+    }
+}
+
+/**
  * Called by libevent when the write buffer reaches 0.  We only
  * provide this because libevent expects it, but we don't use it.
  */
@@ -369,7 +436,7 @@ void on_accept(evutil_socket_t fd, short ev, void *arg) {
         closeAndFreeClient(client);
         return;
     }
-    bufferevent_setcb(client->buf_ev, buffered_on_read_new, buffered_on_write,
+    bufferevent_setcb(client->buf_ev, read_cb, buffered_on_write,
                       buffered_on_error, client);
 
     /* We have to enable it before our callbacks will be

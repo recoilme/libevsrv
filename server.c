@@ -33,10 +33,10 @@
 /* Port to listen on. */
 #define SERVER_PORT 5555
 /* Connection backlog (# of backlogged connections to accept). */
-#define CONNECTION_BACKLOG 8
+#define CONNECTION_BACKLOG 4
 /* Number of worker threads.  Should match number of CPU cores reported in 
  * /proc/cpuinfo. */
-#define NUM_THREADS 8
+#define NUM_THREADS 4
 
 /**
  * Struct to carry around connection (client)-specific data.
@@ -143,12 +143,36 @@ void write_msg(struct bufferevent *buf_event, struct client *client, const char 
 
 void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     client_t *client = (client_t *)arg;
-    char resp[8] = {'S','T','O','R','E','D',13,10};
-    char *response;
+    //char resp[8] = {'S','T','O','R','E','D',13,10};
+    static char msg_fmt[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: %d\r\n"
+        "Connection: keep-alive\r\n"
+        "Keep-Alive: 1;timeout=9\r\n"
+        "\r\n"
+        "%s";
+    //char *response;
     struct evbuffer *input;
 
     input = bufferevent_get_input(bev);
     int len = evbuffer_get_length(input);
+    char *val = "OK";
+    int size = strlen(val);
+
+    int resp_size = (strlen(msg_fmt) -2*2/* %s exclude */) + size + get_int_len(size) + 1/* \0*/;
+    char *resp = malloc(resp_size);
+    snprintf(resp, resp_size,msg_fmt,size,val);
+    //INFO_OUT("resp:'%.*s'\n", resp_size,resp);
+    evbuffer_drain(input, len);
+
+    evbuffer_add(client->output_buffer, resp, resp_size -1);
+    if (bufferevent_write_buffer(bev, client->output_buffer)) {
+        errorOut("Error sending data to client on fd %d\n", client->fd);
+        closeClient(client);
+    }
+    //bufferevent_write_buffer(bev, client->output_buffer);
+
+    /*
     //char data[len];
     char *data;
     data = malloc(len + 1);
@@ -177,8 +201,8 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
         //evbuffer_add(client->output_buffer, resp, sizeof(resp));
         evbuffer_add(client->output_buffer, resp_ptr, resp_len);
 
-        /* Send the results to the client.  This actually only queues the results
-        * for sending. Sending will occur asynchronously, handled by libevent. */
+        // Send the results to the client.  This actually only queues the results
+        // for sending. Sending will occur asynchronously, handled by libevent. 
         if (bufferevent_write_buffer(bev, client->output_buffer)) {
             errorOut("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
@@ -199,6 +223,7 @@ void buffered_on_read_new(struct bufferevent *bev, void *arg) {
     }
 
     free(data);
+    */
 }
 
 /**

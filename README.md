@@ -2,7 +2,7 @@
 ```
 
 cc test.c commands.c -o test && ./test
-gcc -o pudge pudge.c sophia.c server.c workqueue.c commands.c -levent -lpthread -L/usr/local/Cellar/libevent/HEAD-3821cca/lib -I/usr/local/Cellar/libevent/HEAD-3821cca/include && ./pudge
+gcc -o pudge pudge.c shared.c sophia.c server.c workqueue.c commands.c -levent -lpthread -L/usr/local/Cellar/libevent/HEAD-3821cca/lib -I/usr/local/Cellar/libevent/HEAD-3821cca/include && ./pudge
 gcc -o pudge pudge.c sophia.c server.c workqueue.c commands.c -levent -lpthread -L/home/vkulibaba/libevent-2.0.22-stable/.libs -I/home/vkulibaba/libevent-2.0.22-stable/include/
 
 printf "set key 0 0 3\r\nval\r\n" | nc 127.0.0.1 5555

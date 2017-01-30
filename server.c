@@ -29,6 +29,7 @@
 #include "commands.h"
 #include "workqueue.h"
 #include "shared.h"
+#include "sophia.h"
 
 /* Port to listen on. */
 #define SERVER_PORT 5555
@@ -303,6 +304,7 @@ void read_cb(struct bufferevent *bev, void *arg)
     INFO_OUT("fd=%u, input:'%s'\n",client->fd, data);
     //set key 0 0 1
     if (!memcmp("set",data,3)) {
+        INFO_OUT("set parse\n");
         int shift = 0;//shift data pointer
         //check on \n
         char *nl = (char*) memchr(data,'\n',len);
@@ -317,10 +319,11 @@ void read_cb(struct bufferevent *bev, void *arg)
         data-=shift;//move pointer back
         if (!second_nl) {
             //no second new line
+            INFO_OUT("terminated set\n");
             free(data);
             return;
         }
-        INFO_OUT("lets parse\r");
+        INFO_OUT("lets parse\n");
         shift = 4;//'set '
         data+=shift;
         char *space = (char*) memchr(data,' ',len);
@@ -329,42 +332,97 @@ void read_cb(struct bufferevent *bev, void *arg)
             free(data);
             return;
         }
-        int space_pos = (space-data);
+        int key_len = (space-data);
         char *key;
-        key = malloc(space_pos);
-        memcpy(key,data,space_pos);
-        INFO_OUT("key:'%.*s'\n",space_pos,key);
+        key = malloc(key_len);
+        memcpy(key,data,key_len);
+        INFO_OUT("key:'%.*s'\n",key_len,key);
 
         char *val = strstr(data, "\n");
         val+=1;
 
         int val_size = (int) strlen(val)-2;//-(\r\n)
         INFO_OUT("val:'%.*s'\n",val_size,val);
+
+        void *o = sp_document(db);
+        sp_setstring(o, "key", &key[0], key_len);
+        sp_setstring(o, "value", &val[0], val_size);
+        int res = sp_set(db, o);
+        if (res == 0) {
+            evbuffer_add(client->output_buffer, ST_STORED, strlen(ST_STORED));
+        }
+        else {
+            evbuffer_add(client->output_buffer, ST_NOTSTORED, strlen(ST_NOTSTORED));
+        }
         free(key);
         
         data-=shift;
         free(data);
-    }
-    /*
-    char *cmdend = strstr(data, "\r\n\r\n");
-    if (cmdend) {
-        //INFO_OUT("fd=%u, input:'%s'\n",client->fd, data);
-        //remove n bytes befor \r\n and \r\n\ from buffer 
-        evbuffer_drain(input, (cmdend-data)+4);
-        printf("fd=%u, end\n", client->fd);
-        evbuffer_add(client->output_buffer, msg_ok, sizeof(msg_ok)-1);
+        evbuffer_drain(input, len);
         if (bufferevent_write_buffer(bev, client->output_buffer)) {
             errorOut("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
         }
+        
+        return;
     }
 
-out:;
-    free(data);
-    if (bufferevent_write_buffer(bev, client->output_buffer)) {
-        errorOut("Error sending data to client on fd %d\n", client->fd);
-        closeClient(client);
-    }*/
+    //get key\r\n
+    if (!memcmp("get",data,3)) {
+        int shift = 0;//shift data pointer
+        //check on \n
+        char *nl = (char*) memchr(data,'\n',len);
+        if (!nl) {
+            free(data);
+            return; 
+        }
+        INFO_OUT("lets parse get\r");
+        shift = 4;//'get '
+        data+=shift;
+        char *rchar = (char*) memchr(data,'\r',len);
+        if (!rchar) {
+            data-=shift;
+            free(data);
+            return;
+        }
+        int key_len = (rchar-data);
+        char *key;
+        key = malloc(key_len);
+        memcpy(key,data,key_len);
+        INFO_OUT("key:'%.*s'\n",key_len,key);
+
+        void *o = sp_document(db);
+        sp_setstring(o, "key", &key[0], key_len);
+        o = sp_get(db, o);
+        char *val;
+        int size;
+        if (o) {
+            char *ptr = sp_getstring(o, "value", &size);
+            val = strndup_p((char*)ptr,size);
+            sp_destroy(o);
+            INFO_OUT("val:'%.*s'\n", size,val);
+            char *format = "VALUE %s 0 %d\r\n%s\r\nEND\r\n";
+            int resp_size = (strlen(format) -3*2/* % exclude */) + key_len + size + get_int_len(size) + 1/* \0*/;
+            char *resp = malloc(resp_size);
+            snprintf(resp, resp_size,format,key,size,val);
+            INFO_OUT("resp:'%.*s' % d\n", resp_size,resp,resp_size);
+            evbuffer_add(client->output_buffer, resp, strlen(resp));
+            free(val);
+            free(resp);
+        }
+        free(key);
+        
+        data-=shift;
+        free(data);
+        evbuffer_drain(input, len);
+        if (bufferevent_write_buffer(bev, client->output_buffer)) {
+            errorOut("Error sending data to client on fd %d\n", client->fd);
+            closeClient(client);
+        }
+        
+        return;
+    }
+
 }
 
 void buffered_on_read(struct bufferevent *bev, void *arg) {

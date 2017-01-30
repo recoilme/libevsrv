@@ -422,7 +422,42 @@ void read_cb(struct bufferevent *bev, void *arg)
         
         return;
     }
+    if (!memcmp("GET /",data,5)) {
+        int shift = 5;//'GET /'
+        data+=shift;
 
+        size_t cmdend = strcspn(data, " \r\n");
+        char *cmd = strndup_p(data, cmdend);
+        INFO_OUT("Command:%s\n", cmd);
+
+        evbuffer_add(client->output_buffer, msg_ok, sizeof(msg_ok)-1);
+        
+        data-=shift;
+        free(data);
+
+        evbuffer_drain(input, len);
+        if (bufferevent_write_buffer(bev, client->output_buffer)) {
+            errorOut("Error sending data to client on fd %d\n", client->fd);
+            closeClient(client);
+        }
+        
+        return;
+        /*
+        char *space = (char*) memchr(data,' ',len);
+        if (!space) {
+            data-=shift;
+            free(data);
+            return;
+        }
+        int key_len = (space-data);
+        char *key;
+        key = malloc(key_len);
+        memcpy(key,data,key_len);
+        INFO_OUT("key:'%.*s'\n",key_len,key);
+        */
+    }
+    free(data);
+    evbuffer_drain(input, len);
 }
 
 void buffered_on_read(struct bufferevent *bev, void *arg) {

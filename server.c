@@ -290,6 +290,7 @@ void read_cb(struct bufferevent *bev, void *arg)
     if (!memcmp("quit\r\n",data,6)) {
         free(data);
         closeClient(client);
+        return;
     }
     INFO_OUT("fd=%u, input:'%s'\n",client->fd, data);
     //set key 0 0 1
@@ -332,12 +333,13 @@ void read_cb(struct bufferevent *bev, void *arg)
         data-=4;
 
         //find val size
-        char *command = malloc(command_len);
+        char *command = malloc(command_len+1);
+        command[command_len] = '\0';
         memcpy(command,data,command_len);
-        INFO_OUT("command:%.*s\n",command_len,command);
+        INFO_OUT("command:'%.*s'\n",command_len,command);
         char *val_sizestr = strrchr(command, ' ');
         val_sizestr+=1;//' '
-        INFO_OUT("val_sizestr:'%.*s'\n",(int)(command - val_sizestr),val_sizestr);
+        INFO_OUT("val_sizestr:'%.*s' %d\n",(int)(command - val_sizestr),val_sizestr,(int)(command - val_sizestr));
         int val_size = strtol(val_sizestr,NULL,10);
         INFO_OUT("val_size:%d\n",val_size);
         free(command);

@@ -3,6 +3,8 @@ extern void* db;
 extern const char* ST_ERROR;
 extern const char* ST_STORED;
 extern const char* ST_NOTSTORED;
+extern const char* ST_END;
+extern const char* ST_OK;
 extern const int LOGLEVEL;
 
 char *strndup_p(const char *str, size_t len);

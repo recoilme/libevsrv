@@ -269,16 +269,6 @@ void buffered_on_read_old(struct bufferevent *bev, void *arg) {
  */
 void read_cb(struct bufferevent *bev, void *arg)
 {
-    #define MAX_LINE    8096
-    static char msg_ok[] =
-        "HTTP/1.1 200 OK\r\n"
-        "Connection: Keep-Alive\r\n"
-        "Content-Type: text/html; charset=UTF-8\r\n"
-        "Content-Length: 4\r\n"
-        "Keep-Alive: timeout=10, max=20\r\n"
-        "Server: okdb/0.0.1\r\n"
-        "\r\n"
-        "OK\r\n";
     client_t *client = (client_t *)arg;
     struct evbuffer *input;
     input = bufferevent_get_input(bev);
@@ -303,32 +293,34 @@ void read_cb(struct bufferevent *bev, void *arg)
     }
     INFO_OUT("fd=%u, input:'%s'\n",client->fd, data);
     //set key 0 0 1
-    if (!memcmp("set",data,3)) {
+    if (!memcmp("set ",data,4)) {
         INFO_OUT("set parse\n");
-        int shift = 0;//shift data pointer
+        //int shift = 0;//shift data pointer
         //check on \n
-        char *nl = (char*) memchr(data,'\n',len);
+        char *nl = strstr(data,"\r\n");
         if (!nl) {
             free(data);
             return; 
         }
+        int command_len = (int)(nl - data);
+        INFO_OUT("command_len:%d\n",command_len);
         //check on second \n
-        shift+=(nl - data)+1;//shift on pos
-        data+=shift;
-        char *second_nl = (char*) memchr(data,'\n',len);
-        data-=shift;//move pointer back
-        if (!second_nl) {
+        data+=command_len+2;
+        if (!strstr(data,"\r\n")) {
             //no second new line
+            data-=command_len+2;
             INFO_OUT("terminated set\n");
             free(data);
             return;
         }
-        INFO_OUT("lets parse\n");
-        shift = 4;//'set '
-        data+=shift;
+        data-=command_len+2;
+        INFO_OUT("lets parse data:'%s'\n",data);
+        data+=4;//'set '
         char *space = (char*) memchr(data,' ',len);
         if (!space) {
-            data-=shift;
+            data-=4;
+            evbuffer_drain(input, len);
+            ERROR_OUT("Error parsing key\n");
             free(data);
             return;
         }
@@ -337,28 +329,63 @@ void read_cb(struct bufferevent *bev, void *arg)
         key = malloc(key_len);
         memcpy(key,data,key_len);
         INFO_OUT("key:'%.*s'\n",key_len,key);
+        data-=4;
 
-        char *val = strstr(data, "\n");
-        val+=1;
+        //find val size
+        char *command = malloc(command_len);
+        memcpy(command,data,command_len);
+        INFO_OUT("command:%.*s\n",command_len,command);
+        char *val_sizestr = strrchr(command, ' ');
+        val_sizestr+=1;//' '
+        INFO_OUT("val_sizestr:'%.*s'\n",(int)(command - val_sizestr),val_sizestr);
+        int val_size = strtol(val_sizestr,NULL,10);
+        INFO_OUT("val_size:%d\n",val_size);
+        free(command);
 
-        int val_size = (int) strlen(val)-2;//-(\r\n)
-        INFO_OUT("val:'%.*s'\n",val_size,val);
+        //check parsing
+        int drain_size = val_size+2+command_len+2;
+        if (len<drain_size) {
+            //not all value
+            free(key);
+            free(data);
+            INFO_OUT("terminated set (value)\n");
+            return;
+        }
 
-        void *o = sp_document(db);
-        sp_setstring(o, "key", &key[0], key_len);
-        sp_setstring(o, "value", &val[0], val_size);
-        int res = sp_set(db, o);
-        if (res == 0) {
-            evbuffer_add(client->output_buffer, ST_STORED, strlen(ST_STORED));
+        if (val_size == 0) {
+            evbuffer_add(client->output_buffer, ST_NOTSTORED, strlen(ST_NOTSTORED));
+            ERROR_OUT("Error parsing value\n");
+            drain_size = len;
         }
         else {
-            evbuffer_add(client->output_buffer, ST_NOTSTORED, strlen(ST_NOTSTORED));
+            char *val = malloc(val_size);
+            if (!val) {
+                ERROR_OUT("Error out of memory\n");
+                free(key);
+                free(data);
+                closeClient(client);
+                return;
+            }
+            data+=command_len+2;
+            memcpy(val,data,val_size);
+            data-=command_len+2;
+            void *o = sp_document(db);
+            sp_setstring(o, "key", &key[0], key_len);
+            sp_setstring(o, "value", &val[0], val_size);
+            int res = sp_set(db, o);
+            free(val);
+            if (res == 0) {
+                evbuffer_add(client->output_buffer, ST_STORED, strlen(ST_STORED));
+            }
+            else {
+                evbuffer_add(client->output_buffer, ST_NOTSTORED, strlen(ST_NOTSTORED));
+            }
         }
-        free(key);
         
-        data-=shift;
+        free(key);
         free(data);
-        evbuffer_drain(input, len);
+
+        evbuffer_drain(input, drain_size);
         if (bufferevent_write_buffer(bev, client->output_buffer)) {
             errorOut("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
@@ -368,7 +395,7 @@ void read_cb(struct bufferevent *bev, void *arg)
     }
 
     //get key\r\n
-    if (!memcmp("get",data,3)) {
+    if (!memcmp("get ",data,4)) {
         int shift = 0;//shift data pointer
         //check on \n
         char *nl = (char*) memchr(data,'\n',len);
@@ -410,6 +437,9 @@ void read_cb(struct bufferevent *bev, void *arg)
             free(val);
             free(resp);
         }
+        else {
+            evbuffer_add(client->output_buffer, ST_END, strlen(ST_END));
+        }
         free(key);
         
         data-=shift;
@@ -423,41 +453,80 @@ void read_cb(struct bufferevent *bev, void *arg)
         return;
     }
     if (!memcmp("GET /",data,5)) {
+        char *double_nl = strstr(data,"\r\n\r\n");
+        if (!double_nl) {
+            free(data);
+            return; 
+        }
+        int drain_size = (int)(double_nl - data) + 4;//"\r\n\r\n"
+        static char msg_ok2[] = "123";
+        static char msg_ok[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Keep-Alive\r\n"
+        "Content-Type: text/html; charset=UTF-8\r\n"
+        "Content-Length: %d\r\n"
+        "Keep-Alive: timeout=10, max=20\r\n"
+        "Server: okdb/0.0.1\r\n"
+        "\r\n%s";
         int shift = 5;//'GET /'
         data+=shift;
 
         size_t cmdend = strcspn(data, " \r\n");
-        char *cmd = strndup_p(data, cmdend);
-        INFO_OUT("Command:%s\n", cmd);
+        char *key = strndup_p(data, cmdend);
+        INFO_OUT("key:%s\n", key);
 
-        evbuffer_add(client->output_buffer, msg_ok, sizeof(msg_ok)-1);
-        
+        char *resp;
+        int key_len = strlen(key);
+        if (!key_len) {
+            //empty key
+            int resp_size = ((sizeof(msg_ok)) -2*2/* % exclude */) + strlen(ST_OK) + get_int_len(strlen(ST_OK));
+            resp = malloc(resp_size);
+            //resp[resp_size] = '\0';
+            snprintf(resp, resp_size,msg_ok, strlen(ST_OK),ST_OK);
+            INFO_OUT("resp:'%.*s'\n", resp_size-1,resp);
+            evbuffer_add(client->output_buffer, resp, resp_size-1);
+            free(resp);
+        }
+        else {
+            void *o = sp_document(db);
+            sp_setstring(o, "key", &key[0], key_len);
+            o = sp_get(db, o);
+            char *val;
+            int size;
+            if (o) {
+                char *ptr = sp_getstring(o, "value", &size);
+                val = strndup_p((char*)ptr,size);
+                sp_destroy(o);
+
+                INFO_OUT("val:'%.*s'\n", size,val);
+                int resp_size = ((sizeof(msg_ok)) -2*2/* % exclude */) + size + get_int_len(size);
+                char *resp = malloc(resp_size);
+                //resp[resp_size] = '\0';
+                snprintf(resp, resp_size,msg_ok,size,val);
+                INFO_OUT("resp:'%.*s'\n", resp_size-1,resp);
+                evbuffer_add(client->output_buffer, resp, resp_size-1);
+                free(val);
+                free(resp);
+            }
+        }
+        free(key);
         data-=shift;
         free(data);
 
-        evbuffer_drain(input, len);
+        evbuffer_drain(input, drain_size);
         if (bufferevent_write_buffer(bev, client->output_buffer)) {
             errorOut("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
         }
-        
         return;
-        /*
-        char *space = (char*) memchr(data,' ',len);
-        if (!space) {
-            data-=shift;
-            free(data);
-            return;
-        }
-        int key_len = (space-data);
-        char *key;
-        key = malloc(key_len);
-        memcpy(key,data,key_len);
-        INFO_OUT("key:'%.*s'\n",key_len,key);
-        */
     }
     free(data);
     evbuffer_drain(input, len);
+    evbuffer_add(client->output_buffer, ST_ERROR, strlen(ST_ERROR));
+    if (bufferevent_write_buffer(bev, client->output_buffer)) {
+        errorOut("Error sending data to client on fd %d\n", client->fd);
+        closeClient(client);
+    }
 }
 
 void buffered_on_read(struct bufferevent *bev, void *arg) {

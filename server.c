@@ -34,10 +34,10 @@
 /* Port to listen on. */
 #define SERVER_PORT 5555
 /* Connection backlog (# of backlogged connections to accept). */
-#define CONNECTION_BACKLOG 4
+#define CONNECTION_BACKLOG 30
 /* Number of worker threads.  Should match number of CPU cores reported in 
  * /proc/cpuinfo. */
-#define NUM_THREADS 4
+#define NUM_THREADS 30
 
 /**
  * Struct to carry around connection (client)-specific data.
@@ -272,7 +272,9 @@ void read_cb(struct bufferevent *bev, void *arg)
     client_t *client = (client_t *)arg;
     struct evbuffer *input;
     input = bufferevent_get_input(bev);
-    
+    INFO_OUT("read cb\n");
+Start:;
+    INFO_OUT("start\n");
     int len = evbuffer_get_length(input);
     if (len < 6) return;// minimal command: 'quit\r\n'
     char *data;
@@ -281,15 +283,18 @@ void read_cb(struct bufferevent *bev, void *arg)
 
     if (!data) {
         //out of memory error
+        ERROR_OUT("out of memory error\n")
         closeClient(client);
         return;
     }
 
     evbuffer_copyout(input, data, len);
     //quit\r\n
-    if (!memcmp("quit\r\n",data,6)) {
+    if (strstr(data,"quit\r\n")) {
+        ERROR_OUT("quit\n")
         free(data);
-        closeClient(client);
+        evbuffer_drain(input, len);
+        //closeClient(client);
         return;
     }
     INFO_OUT("fd=%u, input:'%s'\n",client->fd, data);
@@ -393,32 +398,36 @@ void read_cb(struct bufferevent *bev, void *arg)
             closeClient(client);
         }
         
-        return;
+        goto Start;
     }
 
     //get key\r\n
     if (!memcmp("get ",data,4)) {
         int shift = 0;//shift data pointer
         //check on \n
-        char *nl = (char*) memchr(data,'\n',len);
+        char *nl = strstr(data,"\r\n");
         if (!nl) {
+            ERROR_OUT("terminated get\n")
             free(data);
             return; 
         }
+        int drain_size = (int)(nl - data) + 2;//"\r\n\r\n"
         INFO_OUT("lets parse get\r");
         shift = 4;//'get '
         data+=shift;
         char *rchar = (char*) memchr(data,'\r',len);
         if (!rchar) {
             data-=shift;
+            ERROR_OUT("terminated get no r\n")
             free(data);
             return;
         }
         int key_len = (rchar-data);
         char *key;
-        key = malloc(key_len);
+        key = malloc(key_len+1);
+        key[key_len] = '\0';
         memcpy(key,data,key_len);
-        INFO_OUT("key:'%.*s'\n",key_len,key);
+        INFO_OUT("key:'%.*s' %d\n",key_len,key,key_len);
 
         void *o = sp_document(db);
         sp_setstring(o, "key", &key[0], key_len);
@@ -441,18 +450,19 @@ void read_cb(struct bufferevent *bev, void *arg)
         }
         else {
             evbuffer_add(client->output_buffer, ST_END, strlen(ST_END));
+            ERROR_OUT("no key\n")
         }
         free(key);
         
         data-=shift;
         free(data);
-        evbuffer_drain(input, len);
+        evbuffer_drain(input, drain_size);
         if (bufferevent_write_buffer(bev, client->output_buffer)) {
-            errorOut("Error sending data to client on fd %d\n", client->fd);
+            ERROR_OUT("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
         }
         
-        return;
+        goto Start;
     }
     if (!memcmp("GET /",data,5)) {
         char *double_nl = strstr(data,"\r\n\r\n");
@@ -520,7 +530,7 @@ void read_cb(struct bufferevent *bev, void *arg)
             errorOut("Error sending data to client on fd %d\n", client->fd);
             closeClient(client);
         }
-        return;
+        goto Start;
     }
     free(data);
     evbuffer_drain(input, len);

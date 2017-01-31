@@ -21,7 +21,10 @@ proc newTaskAsync(task:int) =
   for i in start..endd:
     let rnd = random(1_000_000)+1
     let res = socket.get($rnd)
-    #echo $i
+    #echo $rnd,res
+    if (res != $rnd):
+      echo "val:" & res & " != " & $rnd
+      break
   socket.quit()
 
 
@@ -48,10 +51,11 @@ suite "test suite for pudge":
   
   test "2 + 2 = 4":
     check(2+2 == result)
+
+  test "random read":
+    mainAsync()
   
   test "insert:":
-    check(2+2 == result)
-  #[]
     var
       client = newClient("127.0.0.1",5555)
       key:string = nil
@@ -64,16 +68,13 @@ suite "test suite for pudge":
     for i in 1..size:
 
       key = $i
-      val = newStringOfCap(bytes)
-      val.add(intToStr(i,len))
-      val.add(content)
+      val = $i
       res = client.set(key, val)
-      #echo res
       if res == false:
         break
     check(res == true)
     echo "Insert time [s] ", $(toSeconds(getTime()) - t)
-    client.quit()]#
+    client.quit()
 
   test "read":
     var
@@ -87,11 +88,8 @@ suite "test suite for pudge":
 
       key = $i
       val =  client.get(key)
-      if (i == size):
-        echo "val:", val
-    #check(val ==  "1000000x")
+      if (val != $i):
+        echo val & "!=" & $i
+        break
     echo "Read time [s] ", $(toSeconds(getTime()) - t)
     client.quit()
-
-  test "random read":
-    mainAsync()
